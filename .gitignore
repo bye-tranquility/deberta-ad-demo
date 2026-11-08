@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Results and models
+runs/
+
+# Data (download with scripts/download_naiad.py, split with python -m adblock.split)
+data/
+
+# macOS
+.DS_Store
