@@ -1,0 +1,22 @@
+{
+ "deberta": {
+  "threshold": 0.25,
+  "min_len": 30
+ },
+ "baseline_tfidf_para": {
+  "threshold": 0.55,
+  "min_len": 40
+ },
+ "baseline_tfidf_window": {
+  "threshold": 0.4,
+  "min_len": 40
+ },
+ "baseline_tfidf_sent": {
+  "threshold": 0.45,
+  "min_len": 40
+ },
+ "baseline_position": {
+  "threshold": 0.35,
+  "min_len": 40
+ }
+}

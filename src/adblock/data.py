@@ -79,3 +79,46 @@ def strip_ads(text, spans):
         sep = "\n\n" if "\n\n" in gap else "\n" if "\n" in gap else " "
         text = left + (sep if left and right else "") + right
     return text
+
+
+
+URL_RE = re.compile(r"(?:https?://)?(?:www\.)?[\w-]+(?:\.[\w-]+)*\.(?:com|net|org|io|co|gg|tv|ly|ai|app|me|us|uk|gov|edu)\b",
+                    re.IGNORECASE)
+NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def _replace(text, spans, pattern, token):
+    """Замена совпадений pattern на token с пересчётом спанов.
+
+    piece[i] — кусок нового текста, в который превратился старый символ i: обычный символ -> (n, n + 1),
+    символ внутри замены -> весь токен. Спан (s, e) -> (начало куска s, конец куска e - 1).
+    """
+    out, piece, pos = [], [], 0
+    for m in pattern.finditer(text):
+        for ch in text[pos:m.start()]:
+            n = sum(map(len, out)) if not piece else piece[-1][1]
+            piece.append((n, n + 1))
+            out.append(ch)
+        n = piece[-1][1] if piece else 0
+        piece += [(n, n + len(token))] * (m.end() - m.start())
+        out.append(token)
+        pos = m.end()
+    for ch in text[pos:]:
+        n = piece[-1][1] if piece else 0
+        piece.append((n, n + 1))
+        out.append(ch)
+    return "".join(out), [(piece[a][0], piece[b - 1][1]) for a, b in spans]
+
+
+def normalize(text, spans):
+    """Предобработка как в NaiAD_human: домен ссылки -> URL_TOKEN (путь остаётся), группа цифр -> NUMBER_TOKEN.
+
+    Возвращает (новый текст, спаны рекламы в новых координатах). На уже обработанном тексте ничего не меняет.
+    """
+    text, spans = _replace(text, [tuple(x) for x in spans], URL_RE, "URL_TOKEN")
+    return _replace(text, spans, NUMBER_RE, "NUMBER_TOKEN")
+
+
+def normalize_row(r):
+    text, spans = normalize(r["text"], r["ad_spans"])
+    return {**r, "text": text, "ad_spans": [list(x) for x in spans]}

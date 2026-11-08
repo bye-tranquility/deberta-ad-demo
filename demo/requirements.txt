@@ -1,0 +1,13 @@
+# Зависимости демо для Streamlit Community Cloud (этот файл рядом с app.py важнее корневого uv.lock).
+# torch — CPU-сборка: без CUDA она в несколько раз меньше.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0
+transformers==5.22.2
+sentencepiece==0.2.3
+protobuf==7.36.2
+huggingface-hub==2.4.0
+scikit-learn==1.9.1
+scipy==1.18.1
+numpy==2.5.4
+pandas==3.1.1
+streamlit==1.67.0

@@ -8,6 +8,12 @@
 
   modal run scripts/modal_train.py --smoke --gpu L40S              # проверка, результаты в runs/smoke-L40S
   modal run --detach scripts/modal_train.py --name deberta_b32 --batch-size 32 --lr 3e-5
+  modal run --detach scripts/modal_train.py --cv
+        # кросс-валидация на NaiAD_human: 5 фолдов дообучения runs/deberta/model (runs/deberta_human_fold<k>)
+        # и оценка той же runs/deberta без дообучения на тех же фолдах; всё параллельно
+  modal run --detach scripts/modal_train.py --cv2
+        # вторая схема: нормализация чисел/ссылок, 2 повтора human, эпоха по span_f1 на val (runs/deberta_human3_fold<k>),
+        # затем переобучение на train+val с найденным числом эпох (runs/deberta_human3_refit_fold<k>)
 """
 import subprocess
 from pathlib import Path
@@ -63,9 +69,63 @@ def train_and_evaluate(name: str, smoke: bool, train_args: list[str]):
     volume.commit()
 
 
+@app.function(gpu=DEFAULT_GPU, cpu=4, volumes={VOL: volume}, timeout=3 * 60 * 60)
+def cv_fold(fold: int, finetune: bool, lr: float, epochs: int):
+    """Фолд кросс-валидации: дообучить runs/deberta на human (или взять как есть) и оценить фолд."""
+    def run(*args):
+        cmd = ["python", *args]
+        print("$", " ".join(cmd), flush=True)
+        subprocess.run(cmd, check=True, cwd="/root/project")
+
+    name = f"deberta_human_fold{fold}" if finetune else "deberta"
+    if finetune:
+        run("scripts/train.py", "--name", name, "--init", f"{VOL}/runs/deberta/model", "--human_fold", str(fold),
+            "--lr", str(lr), "--epochs", str(epochs))
+        volume.commit()
+    run("scripts/evaluate_cv.py", "--run", name, "--fold", str(fold))
+    volume.commit()
+
+
+@app.function(gpu=DEFAULT_GPU, cpu=4, volumes={VOL: volume}, timeout=3 * 60 * 60)
+def cv2_fold(fold: int, lr: float, epochs: int, repeat: int, prefix: str):
+    """Вторая схема дообучения на фолде: выбор эпохи по span_f1, затем переобучение на train+val."""
+    import json
+
+    def run(*args):
+        cmd = ["python", *args]
+        print("$", " ".join(cmd), flush=True)
+        subprocess.run(cmd, check=True, cwd="/root/project")
+
+    common = ["--init", f"{VOL}/runs/deberta/model", "--human_fold", str(fold), "--lr", str(lr),
+              "--human_repeat", str(repeat), "--normalize"]
+    select = f"{prefix}_fold{fold}"
+    run("scripts/train.py", "--name", select, "--epochs", str(epochs), "--select", "span_f1", *common)
+    volume.commit()
+    run("scripts/evaluate_cv.py", "--run", select, "--fold", str(fold), "--normalize")
+    volume.commit()
+    best_epoch = json.loads(open(f"{VOL}/runs/{select}/train_config.json").read())["best_epoch"]
+    refit = f"{prefix}_refit_fold{fold}"
+    run("scripts/train.py", "--name", refit, "--epochs", str(best_epoch), "--human_refit", *common)
+    volume.commit()
+    run("scripts/evaluate_cv.py", "--run", refit, "--fold", str(fold), "--normalize")
+    volume.commit()
+
+
 @app.local_entrypoint()
 def main(name: str = "deberta", smoke: bool = False, gpu: str = DEFAULT_GPU,
-         batch_size: int = 16, lr: float = 2e-5, epochs: int = 3):
+         batch_size: int = 16, lr: float = 2e-5, epochs: int = 3, cv: bool = False, cv_lr: float = 1e-5,
+         cv2: bool = False, cv2_repeat: int = 2, cv2_prefix: str = "deberta_human3"):
+    if cv2:
+        for _ in cv2_fold.starmap([(k, cv_lr, epochs, cv2_repeat, cv2_prefix) for k in range(5)], return_exceptions=True):
+            pass
+        print(f"Готово: runs/{cv2_prefix}_fold<k>, runs/{cv2_prefix}_refit_fold<k>")
+        return
+    if cv:
+        jobs = [(k, True, cv_lr, epochs) for k in range(5)] + [(k, False, cv_lr, epochs) for k in range(5)]
+        for _ in cv_fold.starmap(jobs, return_exceptions=True):
+            pass
+        print("Готово. Забрать: modal volume get adblock 'runs/deberta*/cv_*' (см. README)")
+        return
     if smoke:
         name = f"smoke-{gpu}"
     train_args = ["--batch_size", str(batch_size), "--lr", str(lr), "--epochs", str(epochs)]

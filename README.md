@@ -61,15 +61,30 @@ uv run modal volume get adblock runs/deberta/metrics.json runs/deberta/
 ## Демо (Streamlit)
 
 ```bash
-uv run modal volume get adblock runs/deberta/model runs/deberta/   # DeBERTa, ~700 МБ, один раз
-uv run python scripts/baselines.py                                  # baselines -> runs/baseline_*/model.pkl
-uv run streamlit run app.py
+uv run streamlit run demo/app.py
 ```
 
-Слева выбор модели (DeBERTa и все baselines), порог и `min_len` (по умолчанию значения, подобранные на val),
-настоящая разметка и тепловая карта. Текст: случайный пример из test, из `NaiAD_human` или свой.
+Модели берутся из локальной `runs/`, если она есть, иначе с Hugging Face
+([`bye-tranquility/deberta-ad-tagger`](https://huggingface.co/bye-tranquility/deberta-ad-tagger)):
+DeBERTa — из корня репозитория, baselines — из `baselines/<имя>.pkl`. Модели, которых нет ни там, ни там,
+в списке не показываются. Порог и `min_len` по умолчанию — подобранные на val (`demo/config.json`).
+Примеры: 500 текстов test (`demo/examples_test.jsonl`) и NaiAD_human (скачивается с Hugging Face).
+
+Слева: выбор модели, порог, `min_len`, настоящая разметка, тепловая карта.
 Вкладки: подсветка (совпало / лишнее / пропущено), текст без рекламы, график вероятностей по токенам.
-Модели, которых нет в `runs/`, в списке не показываются.
+
+### Деплой на Streamlit Community Cloud
+
+1. Модель на Hugging Face (один раз): `uv run hf upload bye-tranquility/deberta-ad-tagger runs/deberta/model .`;
+   baselines — `uv run hf upload bye-tranquility/deberta-ad-tagger runs/<имя>/model.pkl baselines/<имя>.pkl`.
+2. Код на GitHub; зависимости демо — `demo/requirements.txt` (CPU-сборка torch). Он лежит рядом с `app.py`
+   и поэтому важнее корневого `uv.lock`, в котором torch с CUDA.
+3. share.streamlit.io → New app → репозиторий, ветка `main`, файл `demo/app.py`, Python 3.12.
+
+## Данные
+
+NaiAD — [`MaxAcand/NaiAD`](https://huggingface.co/datasets/MaxAcand/NaiAD), лицензия MIT.
+`demo/examples_test.jsonl` — 500 текстов из test-части нашего сплита этого датасета.
 
 ## Метрики
 

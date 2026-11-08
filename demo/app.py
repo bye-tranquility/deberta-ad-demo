@@ -1,9 +1,11 @@
 """Демо: поиск рекламы в ответе LLM.
 
-  uv run streamlit run app.py
+  uv run streamlit run demo/app.py
 
-Нужны обученные модели: runs/deberta/model (скачать с Modal, см. README) и
-runs/baseline_*/model.pkl (scripts/baselines.py). Недоступные модели в списке не показываются.
+Модели берутся из локальной папки runs/, если она есть (после обучения), иначе скачиваются
+с Hugging Face (HF_REPO): DeBERTa — из корня репозитория, baselines — из baselines/<имя>.pkl.
+Порог и min_len по умолчанию — подобранные на val (demo/config.json).
+Примеры: 500 текстов test (demo/examples_test.jsonl) и NaiAD_human (локально или с HF, датасет MaxAcand/NaiAD, MIT).
 """
 import html
 import json
@@ -15,13 +17,16 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-ROOT = Path(__file__).resolve().parent
+DEMO = Path(__file__).resolve().parent
+ROOT = DEMO.parent
 sys.path.insert(0, str(ROOT / "src"))
 from adblock import baseline_models as bm  # noqa: E402
-from adblock.data import PROCESSED, RUNS, parse, read_jsonl  # noqa: E402
+from adblock.data import RUNS, parse, read_jsonl  # noqa: E402
 from adblock.metrics import boundary_errors, char_metrics, iou, predict_spans, to_spans  # noqa: E402
-from adblock.tokenize import MODEL, label_tokens  # noqa: E402
+from adblock.tokenize import label_tokens  # noqa: E402
 
+HF_REPO = "bye-tranquility/deberta-ad-tagger"
+NAIAD_REPO = "MaxAcand/NaiAD"
 MODELS = {
     "DeBERTa": "deberta",
     "TF-IDF: абзацы": "baseline_tfidf_para",
@@ -29,7 +34,7 @@ MODELS = {
     "TF-IDF: предложения": "baseline_tfidf_sent",
     "Позиция в тексте": "baseline_position",
 }
-HUMAN = ROOT / "data" / "naiad" / "NaiAD_human.jsonl"
+CONFIG = json.loads((DEMO / "config.json").read_text())
 
 # цвета подсветки
 BOTH, EXTRA, MISSED, PRED = "#bbf7d0", "#fecaca", "#bfdbfe", "#fde68a"
@@ -37,45 +42,69 @@ BOTH, EXTRA, MISSED, PRED = "#bbf7d0", "#fecaca", "#bfdbfe", "#fde68a"
 
 # ---------- загрузка (кэшируется между перерисовками) ----------
 
+def deberta_source():
+    local = RUNS / "deberta" / "model"
+    return str(local) if local.exists() else HF_REPO
+
+
+@st.cache_data(show_spinner=False)
+def hf_files():
+    try:
+        from huggingface_hub import list_repo_files
+        return set(list_repo_files(HF_REPO))
+    except Exception:
+        return set()
+
+
+def baseline_path(name):
+    """Локальный runs/<name>/model.pkl или baselines/<name>.pkl с Hugging Face; None — если нет нигде."""
+    local = RUNS / name / "model.pkl"
+    if local.exists():
+        return local
+    if f"baselines/{name}.pkl" in hf_files():
+        from huggingface_hub import hf_hub_download
+        return Path(hf_hub_download(HF_REPO, f"baselines/{name}.pkl"))
+    return None
+
+
 def available_models():
     out = {}
     for label, name in MODELS.items():
-        path = RUNS / name / ("model" if name == "deberta" else "model.pkl")
-        if path.exists():
+        if name == "deberta" or (RUNS / name / "model.pkl").exists() or f"baselines/{name}.pkl" in hf_files():
             out[label] = name
     return out
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Загружаю токенизатор…")
 def tokenizer():
     from transformers import AutoTokenizer
-    return AutoTokenizer.from_pretrained(MODEL)
+    return AutoTokenizer.from_pretrained(deberta_source())
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Загружаю модель…")
 def load_model(name):
     if name == "deberta":
         from adblock.predict import load_deberta
-        return load_deberta(RUNS / name / "model")
-    return bm.load(RUNS / name / "model.pkl")
+        return load_deberta(deberta_source())
+    return bm.load(baseline_path(name))
 
 
-@st.cache_data
 def defaults(name):
-    """Порог и min_len, подобранные на val (из metrics.json)."""
-    path = RUNS / name / "metrics.json"
-    if path.exists():
-        m = json.loads(path.read_text())
-        return float(m["threshold"]), int(m["min_len"])
-    return 0.5, 1
+    """Порог и min_len, подобранные на val."""
+    c = CONFIG.get(name, {"threshold": 0.5, "min_len": 1})
+    return float(c["threshold"]), int(c["min_len"])
 
 
-@st.cache_data
+@st.cache_data(show_spinner="Загружаю примеры…")
 def examples(source):
     if source == "test":
-        return [{"text": r["text"], "ad_spans": r["ad_spans"]} for r in read_jsonl(PROCESSED / "test.jsonl")]
+        return read_jsonl(DEMO / "examples_test.jsonl")
+    path = ROOT / "data" / "naiad" / "NaiAD_human.jsonl"
+    if not path.exists():
+        from huggingface_hub import hf_hub_download
+        path = hf_hub_download(NAIAD_REPO, "NaiAD_human.jsonl", repo_type="dataset")
     rows = []
-    for r in read_jsonl(HUMAN):
+    for r in read_jsonl(path):
         parsed = parse(r["response"])
         if parsed is not None:
             rows.append({"text": parsed[0], "ad_spans": parsed[1]})
